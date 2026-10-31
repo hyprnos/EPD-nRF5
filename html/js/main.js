@@ -4,6 +4,7 @@ let startTime, msgIndex, appVersion;
 let canvas, ctx, textDecoder;
 let paintManager, cropManager;
 let rleSupport;
+let configReceived = false;
 
 const EpdCmd = {
   SET_PINS: 0x00,
@@ -413,9 +414,20 @@ async function reConnect() {
   setTimeout(async function () { await connect(); }, 300);
 }
 
+// 固件的文字状态形如 "mtu=244 rle=1" / "slots=4 0x8 255" / "sid=..." / "t=..."，其余为二进制配置。
+function isTextNotify(data) {
+  let text = '';
+  for (let i = 0; i < Math.min(data.length, 12); i++) {
+    if (data[i] < 0x20 || data[i] > 0x7e) return false;
+    text += String.fromCharCode(data[i]);
+  }
+  return /^[a-z]+=/.test(text);
+}
+
 function handleNotify(value, idx) {
   const data = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-  if (idx == 0) {
+  if (!isTextNotify(data)) {
+    configReceived = true;
     addLog(`收到配置：${bytes2hex(data)}`);
     const epdpins = document.getElementById("epdpins");
     const epddriver = document.getElementById("epddriver");
@@ -481,16 +493,25 @@ async function connect() {
   }
 
   try {
-    await epdCharacteristic.startNotifications();
+    // 先挂监听再启用通知，避免漏掉标签在启用通知时立刻发出的配置
     epdCharacteristic.addEventListener('characteristicvaluechanged', (event) => {
       handleNotify(event.target.value, msgIndex++);
     });
+    await epdCharacteristic.startNotifications();
   } catch (e) {
     console.error(e);
     if (e.message) addLog("startNotifications: " + e.message);
   }
 
+  configReceived = false;
   await write(EpdCmd.INIT);
+  // 标签收到 INIT 后会回配置；1.5 秒内没收到就再发一次
+  setTimeout(async () => {
+    if (!configReceived && epdCharacteristic != null) {
+      addLog('未收到配置，重发 INIT');
+      await write(EpdCmd.INIT);
+    }
+  }, 1500);
 
   document.getElementById("connectbutton").innerHTML = '断开';
   updateButtonStatus();
