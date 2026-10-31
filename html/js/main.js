@@ -664,6 +664,7 @@ function updateDitcherOptions() {
   const colorMode = selectedOption.getAttribute('data-color');
   const canvasSize = selectedOption.getAttribute('data-size');
 
+  setFourColorCalibration(epdDriverSelect.value === '14');
   if (colorMode) document.getElementById('ditherMode').value = colorMode;
   if (canvasSize) document.getElementById('canvasSize').value = canvasSize;
   addLog(`驱动: ${selectedOption.textContent}，画布: ${canvasSize}`);

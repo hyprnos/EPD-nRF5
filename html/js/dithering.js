@@ -18,6 +18,18 @@ const fourColorPalette = [
   { name: "黄色", r: 255, g: 255, b: 0, value: 0x02 }
 ];
 
+// 型号0x14 (NRF_EPD 3.97寸四色) 屏幕实拍估算色: 红偏暗红、黄偏橙。
+// 用它做抖动和预览，肤色等中间色调更接近实物。
+const tag14Colors = { 0x00: [20, 20, 24], 0x01: [225, 225, 215], 0x03: [165, 30, 30], 0x02: [240, 185, 30] };
+const stdFourColors = { 0x00: [0, 0, 0], 0x01: [255, 255, 255], 0x03: [255, 0, 0], 0x02: [255, 255, 0] };
+
+function setFourColorCalibration(tag14) {
+  const src = tag14 ? tag14Colors : stdFourColors;
+  for (const c of fourColorPalette) {
+    [c.r, c.g, c.b] = src[c.value];
+  }
+}
+
 // 三色调色板
 const threeColorPalette = [
   { name: "黑色", r: 0, g: 0, b: 0, value: 0x00 },
@@ -568,12 +580,7 @@ function decodeProcessedData(processedData, width, height, mode) {
       }
     }
   } else if (mode === 'fourColor') {
-    const fourColorValues = [
-      { value: 0x00, r: 0, g: 0, b: 0 },      // 黑色
-      { value: 0x01, r: 255, g: 255, b: 255 }, // 白色
-      { value: 0x03, r: 255, g: 0, b: 0 },     // 红色
-      { value: 0x02, r: 255, g: 255, b: 0 }    // 黄色
-    ];
+    const fourColorValues = fourColorPalette;
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
         const newIndex = (y * width + x) / 4 | 0;
