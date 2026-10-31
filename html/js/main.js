@@ -547,6 +547,54 @@ function setCanvasTitle(title) {
   }
 }
 
+// 图片旋转(顺时针, 0/90/180/270)。旋转后的图片以 blob 地址保存在 sourceImageUrl, 供绘制和裁剪共用。
+let imageRotation = 0;
+let sourceImageUrl = null;
+
+function buildSourceImage(file, done) {
+  if (sourceImageUrl) URL.revokeObjectURL(sourceImageUrl);
+  sourceImageUrl = null;
+  const rawUrl = URL.createObjectURL(file);
+  if (imageRotation === 0) {
+    sourceImageUrl = rawUrl;
+    done();
+    return;
+  }
+  const img = new Image();
+  img.onload = function () {
+    const swap = imageRotation % 180 !== 0;
+    const c = document.createElement('canvas');
+    c.width = swap ? img.height : img.width;
+    c.height = swap ? img.width : img.height;
+    const cctx = c.getContext('2d');
+    cctx.translate(c.width / 2, c.height / 2);
+    cctx.rotate(imageRotation * Math.PI / 180);
+    cctx.drawImage(img, -img.width / 2, -img.height / 2);
+    URL.revokeObjectURL(rawUrl);
+    c.toBlob(function (blob) {
+      sourceImageUrl = URL.createObjectURL(blob);
+      done();
+    }, 'image/png');
+  };
+  img.src = rawUrl;
+}
+
+function rotateImage() {
+  const imageFile = document.getElementById('imageFile');
+  if (imageFile.files.length == 0) {
+    alert('请先选择图片。');
+    return;
+  }
+  imageRotation = (imageRotation + 90) % 360;
+  if (cropManager.isCropMode()) cropManager.exitCropMode();
+  updateImage();
+}
+
+function onImageFileChange() {
+  imageRotation = 0;
+  updateImage();
+}
+
 function updateImage() {
   const imageFile = document.getElementById('imageFile');
   if (imageFile.files.length == 0) {
@@ -554,20 +602,21 @@ function updateImage() {
     return;
   }
 
-  const image = new Image();
-  image.onload = function () {
-    URL.revokeObjectURL(this.src);
-    if (image.width / image.height == canvas.width / canvas.height) {
-      if (cropManager.isCropMode()) cropManager.exitCropMode();
-      ctx.drawImage(image, 0, 0, image.width, image.height, 0, 0, canvas.width, canvas.height);
-      convertDithering();
-    } else {
-      alert(`图片宽高比例与画布不匹配，将进入裁剪模式。\n请放大图片后移动图片使其充满画布, 再点击"完成"按钮。`);
-      paintManager.setActiveTool(null, '');
-      cropManager.initializeCrop();
-    }
-  };
-  image.src = URL.createObjectURL(imageFile.files[0]);
+  buildSourceImage(imageFile.files[0], function () {
+    const image = new Image();
+    image.onload = function () {
+      if (image.width / image.height == canvas.width / canvas.height) {
+        if (cropManager.isCropMode()) cropManager.exitCropMode();
+        ctx.drawImage(image, 0, 0, image.width, image.height, 0, 0, canvas.width, canvas.height);
+        convertDithering();
+      } else {
+        alert(`图片宽高比例与画布不匹配，将进入裁剪模式。\n请放大图片后移动图片使其充满画布, 再点击"完成"按钮。`);
+        paintManager.setActiveTool(null, '');
+        cropManager.initializeCrop();
+      }
+    };
+    image.src = sourceImageUrl;
+  });
 }
 
 function updateCanvasSize() {

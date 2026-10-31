@@ -58,7 +58,7 @@ class CropManager {
     this.exitCropMode();
     this.resetStates();
 
-    this.canvas.style.backgroundImage = `url(${URL.createObjectURL(imageFile.files[0])})`;
+    this.canvas.style.backgroundImage = `url(${sourceImageUrl || URL.createObjectURL(imageFile.files[0])})`;
     this.canvas.style.backgroundSize = '100%';
     this.canvas.style.backgroundPosition = '';
     this.canvas.style.backgroundRepeat = 'no-repeat';
@@ -89,7 +89,7 @@ class CropManager {
 
     const image = new Image();
     image.onload = () => {
-      URL.revokeObjectURL(image.src);
+      if (image.src !== sourceImageUrl) URL.revokeObjectURL(image.src);
 
       const fieldsetRect = this.canvas.getBoundingClientRect();
       const scale = (image.width / fieldsetRect.width) / this.backgroundZoom;
@@ -105,7 +105,7 @@ class CropManager {
       this.exitCropMode();
       if (callback) callback();
     };
-    image.src = URL.createObjectURL(imageFile.files[0]);
+    image.src = sourceImageUrl || URL.createObjectURL(imageFile.files[0]);
   }
 
   handleTouchStart(e) {

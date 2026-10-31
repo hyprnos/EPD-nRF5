@@ -68,7 +68,8 @@
 		<fieldset>
 			<legend>蓝牙传图</legend>
 			<div class="flex-container">
-				<input type="file" id="imageFile" accept=".png,.jpg,.bmp,.webp,.jpeg" onchange="updateImage()">
+				<input type="file" id="imageFile" accept=".png,.jpg,.bmp,.webp,.jpeg" onchange="onImageFileChange()">
+				<button type="button" class="secondary" style="width:auto" onclick="rotateImage()">旋转图片 90°</button>
 			</div>
 			<div class="flex-container options">
 				<div class="flex-group debug">
