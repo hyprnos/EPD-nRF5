@@ -38,6 +38,7 @@ const canvasSizes = [
   { name: '3.7_240_416', width: 240, height: 416 },
   { name: '3.7_280_480', width: 280, height: 480 },
   { name: '3.97_800_480', width: 800, height: 480 },
+  { name: '3.97_552_768', width: 552, height: 768 },
   { name: '3.98_768_552', width: 768, height: 552 },
   { name: '4.2_400_300', width: 400, height: 300 },
   { name: '5.79_792_272', width: 792, height: 272 },
@@ -105,18 +106,43 @@ async function write(cmd, data, withResponse = true) {
   return true;
 }
 
+// 型号0x14 (NRF_EPD 3.97寸四色): 显存按列排布，每列从下到上，列从左到右，每像素2bit(高位在前)。
+// 输入为 row-major 的 2bpp 数据(width x height，竖放，挂绳孔在上)。
+function convertColumnMajor2bpp(data, width, height) {
+  const out = new Uint8Array((width * height) >> 2);
+  let o = 0;
+  for (let x = 0; x < width; x++) {
+    for (let y = height - 1; y >= 0; y -= 4) {
+      let b = 0;
+      for (let j = 0; j < 4; j++) {
+        const yy = y - j;
+        const idx = yy * width + x;
+        const v = (data[idx >> 2] >> (6 - ((idx & 3) * 2))) & 0x03;
+        b |= v << (6 - j * 2);
+      }
+      out[o++] = b;
+    }
+  }
+  return out;
+}
+
+function isDriver14() {
+  return document.getElementById('epddriver').value === '14';
+}
+
 async function writeImage(data, step = 'bw') {
   const chunkSize = document.getElementById('mtusize').value - 2;
-  const interleavedCount = document.getElementById('interleavedcount').value;
+  // 型号0x14: 每个包都等确认，避免丢包
+  const interleavedCount = isDriver14() ? 0 : document.getElementById('interleavedcount').value;
   let noReplyCount = interleavedCount;
   let totalRleLength = 0;
   const stepText = step === 'bw' ? '数据块' : '红色块';
 
   // Use RLE only when its complete encoded stream is smaller than the
   // original data. Each RLE chunk contains complete codes.
-  const rleChunks = rleSupport ? rleCompressMTU(data, chunkSize) : null;
+  const rleChunks = (rleSupport && !isDriver14()) ? rleCompressMTU(data, chunkSize) : null;
   const rleLength = rleChunks ? rleChunks.reduce((total, chunk) => total + chunk.length, 0) : data.length;
-  const useRle = rleSupport && rleLength < data.length;
+  const useRle = rleSupport && !isDriver14() && rleLength < data.length;
   const totalChunks = useRle ? rleChunks.length : Math.ceil(data.length / chunkSize);
 
   for (let i = 0; i < totalChunks; i++) {
@@ -264,7 +290,11 @@ async function sendimg() {
       await writeImage(processedData, 'bw');
     }
   } else if (ditherMode === 'fourColor' || ditherMode === 'sixColor') {
-    await writeImage(processedData, 'bw');
+    if (epdDriverSelect.value === '14') {
+      await writeImage(convertColumnMajor2bpp(processedData, canvas.width, canvas.height), 'bw');
+    } else {
+      await writeImage(processedData, 'bw');
+    }
   } else {
     addLog("当前固件不支持此颜色模式。");
     updateButtonStatus();
