@@ -622,6 +622,10 @@ function updateImage() {
 function updateCanvasSize() {
   const selectedSizeName = document.getElementById('canvasSize').value;
   const selectedSize = canvasSizes.find(size => size.name === selectedSizeName);
+  if (!selectedSize) {
+    addLog(`未找到画布尺寸: "${selectedSizeName}"，保持当前画布`);
+    return;
+  }
 
   canvas.width = selectedSize.width;
   canvas.height = selectedSize.height;
@@ -632,11 +636,16 @@ function updateCanvasSize() {
 function updateDitcherOptions() {
   const epdDriverSelect = document.getElementById('epddriver');
   const selectedOption = epdDriverSelect.options[epdDriverSelect.selectedIndex];
+  if (!selectedOption) {
+    addLog(`驱动列表里没有型号 0x${epdDriverSelect.value}，画布未切换`);
+    return;
+  }
   const colorMode = selectedOption.getAttribute('data-color');
   const canvasSize = selectedOption.getAttribute('data-size');
 
   if (colorMode) document.getElementById('ditherMode').value = colorMode;
   if (canvasSize) document.getElementById('canvasSize').value = canvasSize;
+  addLog(`驱动: ${selectedOption.textContent}，画布: ${canvasSize}`);
 
   updateCanvasSize(); // always update image
 }
