@@ -133,8 +133,7 @@ function isDriver14() {
 
 async function writeImage(data, step = 'bw') {
   const chunkSize = document.getElementById('mtusize').value - 2;
-  // 型号0x14: 每个包都等确认，避免丢包
-  const interleavedCount = isDriver14() ? 0 : document.getElementById('interleavedcount').value;
+  const interleavedCount = document.getElementById('interleavedcount').value;
   let noReplyCount = interleavedCount;
   let totalRleLength = 0;
   const stepText = step === 'bw' ? '数据块' : '红色块';
