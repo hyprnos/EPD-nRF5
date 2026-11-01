@@ -116,6 +116,10 @@
 				<div class="flex-group">
 					<label for="ditherAlg">抖动算法:</label>
 					<select id="ditherAlg" onchange="applyDither()">
+						<option value="linearJJN" selected>混色优化 · Jarvis (推荐)</option>
+						<option value="linearFS">混色优化 · Floyd-Steinberg</option>
+						<option value="linearSierra">混色优化 · Sierra</option>
+						<option value="yliluoma">有序混色 · Yliluoma</option>
 						<option value="floydSteinberg">Floyd-Steinberg</option>
 						<option value="atkinson">Atkinson</option>
 						<option value="bayer">Bayer</option>
@@ -243,7 +247,7 @@
 			</span>
 		</div>
 	</div>
-	<script type="text/javascript" src="js/dithering.js?v=20261101d"></script>
+	<script type="text/javascript" src="js/dithering.js?v=20261101f"></script>
 	<script type="text/javascript" src="js/rle.js"></script>
 	<script type="text/javascript" src="js/paint.js"></script>
 	<script type="text/javascript" src="js/crop.js?v=20261101a"></script>

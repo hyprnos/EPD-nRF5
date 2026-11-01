@@ -542,6 +542,184 @@ function bayerDither(imageData, strength, mode) {
   return imageData;
 }
 
+// ===== 线性光抖动 / 混色算法 =====
+// 误差扩散和混色都在线性光空间进行（sRGB 空间直接扩散会让中间调偏暗、混色发脏），
+// 并把输入映射到屏幕实际可显示的亮度范围(黑点~白点)，避免误差在白/黑端堆积。
+// 工作空间 gamma：2.2 为严格线性光（物理正确但墨水屏上偏暗），1.0 等同 sRGB 空间扩散。
+// 取接近 1 的值：保留混色优势，又不会把中间调压得太黑。
+let ditherGamma = 1.2;
+let srgbToLinLUT = new Float32Array(256);
+let srgbToLinLUTGamma = 0;
+function ensureLinLUT() {
+  if (srgbToLinLUTGamma === ditherGamma) return;
+  for (let i = 0; i < 256; i++) srgbToLinLUT[i] = Math.pow(i / 255, ditherGamma);
+  srgbToLinLUTGamma = ditherGamma;
+}
+
+function getModePalette(mode) {
+  if (mode === 'fourColor') return fourColorPalette;
+  if (mode === 'threeColor') return threeColorPalette;
+  return rgbPalette;
+}
+
+// 工作空间值 -> 真实线性光，再转 Lab（仅用于“选最近色”的判断）
+function linToLab(r, g, b) {
+  const k = 2.2 / ditherGamma;
+  if (k !== 1) { r = Math.pow(r, k); g = Math.pow(g, k); b = Math.pow(b, k); }
+  let x = (r * 0.4124 + g * 0.3576 + b * 0.1805) / 0.95047;
+  let y = r * 0.2126 + g * 0.7152 + b * 0.0722;
+  let z = (r * 0.0193 + g * 0.1192 + b * 0.9505) / 1.08883;
+  const f = (t) => (t > 0.008856 ? Math.cbrt(t) : 7.787 * t + 16 / 116);
+  x = f(x); y = f(y); z = f(z);
+  return [116 * y - 16, 500 * (x - y), 200 * (y - z)];
+}
+
+function prepareLinearPalette(mode) {
+  ensureLinLUT();
+  const pal = getModePalette(mode);
+  const lin = pal.map((c) => [srgbToLinLUT[c.r], srgbToLinLUT[c.g], srgbToLinLUT[c.b]]);
+  const lab = lin.map((c) => linToLab(c[0], c[1], c[2]));
+  const lum = lin.map((c) => c[0] * 0.2126 + c[1] * 0.7152 + c[2] * 0.0722);
+  let lo = 0, hi = 0;
+  for (let i = 1; i < pal.length; i++) {
+    if (lum[i] < lum[lo]) lo = i;
+    if (lum[i] > lum[hi]) hi = i;
+  }
+  return { pal, lin, lab, lum, lo: lin[lo], hi: lin[hi] };
+}
+
+// 读入图像为线性光，并映射到 [黑点, 白点]
+function toLinearBuffer(imageData, lp) {
+  const d = imageData.data;
+  const n = imageData.width * imageData.height;
+  const buf = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    for (let c = 0; c < 3; c++) {
+      buf[i * 3 + c] = lp.lo[c] + srgbToLinLUT[d[i * 4 + c]] * (lp.hi[c] - lp.lo[c]);
+    }
+  }
+  return buf;
+}
+
+// 在 Lab 中找最近的调色板色。亮度权重低一点，让色相/饱和度优先（肤色、橙色更准）
+function nearestPaletteLab(lp, r, g, b) {
+  const lab = linToLab(r, g, b);
+  let best = 0, bd = Infinity;
+  for (let i = 0; i < lp.lab.length; i++) {
+    const dl = lab[0] - lp.lab[i][0], da = lab[1] - lp.lab[i][1], db = lab[2] - lp.lab[i][2];
+    const dist = dl * dl + da * da + db * db;
+    if (dist < bd) { bd = dist; best = i; }
+  }
+  return best;
+}
+
+function writePaletteIndices(imageData, idxArr, lp) {
+  const d = imageData.data;
+  for (let i = 0; i < idxArr.length; i++) {
+    const c = lp.pal[idxArr[i]];
+    d[i * 4] = c.r; d[i * 4 + 1] = c.g; d[i * 4 + 2] = c.b;
+  }
+  return imageData;
+}
+
+// 线性光 + 蛇形扫描的误差扩散
+const diffusionKernels = {
+  fs: { div: 16, k: [[1, 0, 7], [-1, 1, 3], [0, 1, 5], [1, 1, 1]] },
+  jjn: { div: 48, k: [[1, 0, 7], [2, 0, 5], [-2, 1, 3], [-1, 1, 5], [0, 1, 7], [1, 1, 5], [2, 1, 3],
+                       [-2, 2, 1], [-1, 2, 3], [0, 2, 5], [1, 2, 3], [2, 2, 1]] },
+  sierra: { div: 32, k: [[1, 0, 5], [2, 0, 3], [-2, 1, 2], [-1, 1, 4], [0, 1, 5], [1, 1, 4], [2, 1, 2],
+                          [-1, 2, 2], [0, 2, 3], [1, 2, 2]] }
+};
+
+function linearDiffusionDither(imageData, strength, mode, kernelName) {
+  const w = imageData.width, h = imageData.height;
+  const lp = prepareLinearPalette(mode);
+  const buf = toLinearBuffer(imageData, lp);
+  const out = new Uint8Array(w * h);
+  const kern = diffusionKernels[kernelName];
+  const maxErr = 0.35; // 限制单次误差，防止饱和色把误差带得过远形成拖尾
+
+  for (let y = 0; y < h; y++) {
+    const dir = (y & 1) ? -1 : 1;
+    const x0 = dir === 1 ? 0 : w - 1;
+    for (let n = 0, x = x0; n < w; n++, x += dir) {
+      const o = (y * w + x) * 3;
+      const r = Math.min(1, Math.max(0, buf[o]));
+      const g = Math.min(1, Math.max(0, buf[o + 1]));
+      const b = Math.min(1, Math.max(0, buf[o + 2]));
+      const ci = nearestPaletteLab(lp, r, g, b);
+      out[y * w + x] = ci;
+      const pc = lp.lin[ci];
+      const er = Math.max(-maxErr, Math.min(maxErr, (buf[o] - pc[0]) * strength));
+      const eg = Math.max(-maxErr, Math.min(maxErr, (buf[o + 1] - pc[1]) * strength));
+      const eb = Math.max(-maxErr, Math.min(maxErr, (buf[o + 2] - pc[2]) * strength));
+      for (const [dx, dy, wt] of kern.k) {
+        const nx = x + dx * dir, ny = y + dy;
+        if (nx < 0 || nx >= w || ny >= h) continue;
+        const f = wt / kern.div, no = (ny * w + nx) * 3;
+        buf[no] += er * f; buf[no + 1] += eg * f; buf[no + 2] += eb * f;
+      }
+    }
+  }
+  return writePaletteIndices(imageData, out, lp);
+}
+
+// Yliluoma 位置混色：为每个像素在线性光里规划一组 64 色混合配方，
+// 再用 8x8 Bayer 阈值挑选其中一个。没有误差扩散的拖尾/蠕虫纹，纹理均匀，
+// 红+黄混橙、黑+白混灰都很稳定。
+const bayer8 = (() => {
+  const m = [[0, 2], [3, 1]];
+  let size = 2, cur = m;
+  while (size < 8) {
+    const next = [];
+    for (let y = 0; y < size * 2; y++) {
+      next.push([]);
+      for (let x = 0; x < size * 2; x++) {
+        next[y][x] = 4 * cur[y % size][x % size] + m[Math.floor(y / size)][Math.floor(x / size)];
+      }
+    }
+    cur = next; size *= 2;
+  }
+  return cur;
+})();
+
+function yliluomaDither(imageData, strength, mode) {
+  const w = imageData.width, h = imageData.height;
+  const lp = prepareLinearPalette(mode);
+  const buf = toLinearBuffer(imageData, lp);
+  const out = new Uint8Array(w * h);
+  const N = 64;
+  const cache = new Map();
+  const ev = Math.min(1, Math.max(0.1, strength)); // 混色“贪心”程度
+
+  const plan = (r, g, b) => {
+    const key = (Math.round(r * 63) << 12) | (Math.round(g * 63) << 6) | Math.round(b * 63);
+    let p = cache.get(key);
+    if (p) return p;
+    const e = [0, 0, 0];
+    const arr = [];
+    for (let i = 0; i < N; i++) {
+      const t0 = r + e[0] * ev, t1 = g + e[1] * ev, t2 = b + e[2] * ev;
+      const ci = nearestPaletteLab(lp, Math.min(1, Math.max(0, t0)), Math.min(1, Math.max(0, t1)), Math.min(1, Math.max(0, t2)));
+      arr.push(ci);
+      const pc = lp.lin[ci];
+      e[0] += r - pc[0]; e[1] += g - pc[1]; e[2] += b - pc[2];
+    }
+    arr.sort((a, c) => lp.lum[a] - lp.lum[c]);
+    cache.set(key, arr);
+    return arr;
+  };
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const o = (y * w + x) * 3;
+      const p = plan(Math.min(1, Math.max(0, buf[o])), Math.min(1, Math.max(0, buf[o + 1])), Math.min(1, Math.max(0, buf[o + 2])));
+      out[y * w + x] = p[bayer8[y & 7][x & 7]];
+    }
+  }
+  return writePaletteIndices(imageData, out, lp);
+}
+
 function ditherImage(imageData, alg, strength, mode) {
   switch (alg) {
     case 'floydSteinberg':
@@ -554,6 +732,14 @@ function ditherImage(imageData, alg, strength, mode) {
       return jarvisDither(imageData, strength, mode);
     case 'bayer':
       return bayerDither(imageData, strength, mode);
+    case 'linearFS':
+      return linearDiffusionDither(imageData, strength, mode, 'fs');
+    case 'linearJJN':
+      return linearDiffusionDither(imageData, strength, mode, 'jjn');
+    case 'linearSierra':
+      return linearDiffusionDither(imageData, strength, mode, 'sierra');
+    case 'yliluoma':
+      return yliluomaDither(imageData, strength, mode);
     case 'none':
     default:
       return imageData;
